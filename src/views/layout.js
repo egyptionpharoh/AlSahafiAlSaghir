@@ -76,8 +76,8 @@ function publicPage(ctx, { title, description, canonical, image, body, bodyClass
   const inst = db.setting('institution');
   const assets = db.setting('assets');
   const pub = db.setting('publishing');
-  const cats = db.all('SELECT slug, name FROM categories WHERE is_visible = 1 ORDER BY sort_order, id');
-  const issue = pub.current_issue_id ? db.one("SELECT number, title FROM issues WHERE id = ? AND status = 'published'", pub.current_issue_id) : null;
+  const cats = db.navCategories();
+  const issue = pub.current_issue_id ? db.currentIssueNav() : null;
   const active = ctx.activeCategory || '';
   return html`${head({ title, description, canonical, image })}
 <body class="pub ${bodyClass}">
@@ -121,7 +121,7 @@ function publicPage(ctx, { title, description, canonical, image, body, bodyClass
     <div class="toolbar__links">
       <a href="/cover">الغلاف</a>
       ${ctx.user ? html`<a class="btn-mini" href="${ctx.user.role === 'student' ? '/desk' : '/newsroom'}">${ctx.user.role === 'student' ? 'مكتبي الصحفي' : 'غرفة التحرير'}</a>`
-    : html`<a class="btn-mini" href="/login">دخول الكتّاب</a>`}
+    : html`<a class="btn-write" href="/write">✍️ اكتب للجريدة</a><a class="btn-login" href="/login">دخول المشرفين</a>`}
     </div>
   </div>
 </header>

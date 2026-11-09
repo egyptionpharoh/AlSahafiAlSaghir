@@ -10,11 +10,19 @@ const ROOT = path.resolve(__dirname, '..');
 
 function tmpDir(prefix = 'ss-test-') { return fs.mkdtempSync(path.join(os.tmpdir(), prefix)); }
 
+// TEST_TURSO_MOCK=http://127.0.0.1:8787 → يشغّل الاختبارات نفسها على وضع Turso السحابي (عبر tests/mock-turso.js)
+function tursoEnv(dataDir) {
+  const mock = process.env.TEST_TURSO_MOCK;
+  if (!mock) return {};
+  fs.mkdirSync(dataDir, { recursive: true });
+  return { TURSO_DATABASE_URL: `${mock}/db/${encodeURIComponent(path.join(dataDir, 'app.db'))}`, TURSO_AUTH_TOKEN: 'test-token' };
+}
+
 function startServer({ dataDir, port, env = {} }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['server.js'], {
       cwd: ROOT,
-      env: { ...process.env, NODE_ENV: 'test', DATA_DIR: dataDir, BACKUPS_DIR: path.join(dataDir, '..', path.basename(dataDir) + '-bk'), PORT: String(port), HOST: '127.0.0.1', FONTS_CDN: '0', ...env },
+      env: { ...process.env, NODE_ENV: 'test', DATA_DIR: dataDir, BACKUPS_DIR: path.join(dataDir, '..', path.basename(dataDir) + '-bk'), PORT: String(port), HOST: '127.0.0.1', FONTS_CDN: '0', ...tursoEnv(dataDir), ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = ''; let started = false;

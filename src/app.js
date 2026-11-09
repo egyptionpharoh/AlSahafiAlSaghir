@@ -5,7 +5,7 @@ const path = require('node:path');
 const config = require('./config');
 const db = require('./db');
 const S = require('./security');
-const { html, Router, HttpError, parseCookies, parseForm, parseJson, cookie, addCookie, send, sendJson, redirect } = require('./http');
+const { html, esc, Router, HttpError, parseCookies, parseForm, parseJson, cookie, addCookie, send, sendJson, redirect } = require('./http');
 const { plainPage } = require('./views/layout');
 
 const router = new Router();
@@ -13,6 +13,7 @@ require('./routes/public')(router);
 require('./routes/media')(router);
 require('./routes/auth')(router);
 require('./routes/setup')(router);
+require('./routes/write')(router);
 require('./routes/desk')(router);
 require('./routes/newsroom')(router);
 
@@ -79,7 +80,38 @@ async function handle(req, res) {
   if ((req.method === 'GET' || req.method === 'HEAD') && pathname.startsWith('/static/')) {
     if (serveStatic(req, res, pathname)) return;
   }
+  // على Vercel تُحوَّل /static/... إلى ملفات المجلد public مباشرة؛ إن وصلت إلى هنا نخدمها نحن
+  if ((req.method === 'GET' || req.method === 'HEAD') && /^\/(css|js|img)\//.test(pathname)) {
+    if (serveStatic(req, res, '/static' + pathname)) return;
+  }
 
+  // إعداد ناقص على الاستضافة: نعرض السبب بوضوح بدل انهيار الدالة (FUNCTION_INVOCATION_FAILED)
+  if (config.problem) {
+    res.statusCode = 503;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.end(`<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>الصحفي الصغير — إعداد غير مكتمل</title><body style="font-family:system-ui,Tahoma,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem;line-height:1.9"><h1>الجريدة تحتاج خطوة إعداد</h1><p>${esc(config.problem)}</p></body></html>`);
+  }
+
+  try {
+    await db.withRequest(() => handleRequest(req, res, url, pathname));
+  } catch (err) {
+    // فشل قبل الوصول للموجّه (مثل تعذر الاتصال بقاعدة البيانات)
+    console.error(`[${new Date().toISOString()}] ${req.method} ${pathname}: فشل تهيئة الطلب:`, err && err.stack ? err.stack : err);
+    if (res.headersSent) { res.destroy(); return; }
+    res.statusCode = 503;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end('<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>الصحفي الصغير</title><body style="font-family:system-ui,Tahoma,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem;line-height:1.9"><h1>نعتذر، الجريدة غير متاحة الآن</h1><p>تعذر الاتصال بقاعدة البيانات. أعد المحاولة بعد قليل.</p></body></html>');
+  }
+}
+
+async function handleRequest(req, res, url, pathname) {
+  if (config.onVercel) {
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    await require('./routes/setup').announceSetup(`https://${host}`).catch(() => {});
+    if (Math.random() < 0.01) S.purgeExpiredSessions().catch(() => {});
+  }
   const cookies = parseCookies(req.headers.cookie);
   const ip = clientIp(req);
   req.ip = ip;
@@ -94,11 +126,14 @@ async function handle(req, res) {
     }
 
     // الجلسة
-    const session = S.loadSession(cookies[S.COOKIE]);
+    const session = await S.loadSession(cookies[S.COOKIE]);
     if (session) {
       ctx.session = session;
       ctx.user = { id: session.user_id, username: session.username, role: session.role, display_name: session.display_name, must_change_password: session.must_change_password };
       ctx.csrf = session.csrf_token;
+      if ((session.role === 'editor' || session.role === 'admin') && req.method === 'GET' && pathname.startsWith('/newsroom')) {
+        ctx.queueCount = (await db.one("SELECT COUNT(*) n FROM articles WHERE status IN ('submitted','in_review')")).n;
+      }
     }
 
     // تحديد معدل الطلبات العام
@@ -137,7 +172,7 @@ async function handle(req, res) {
       else if (ct.startsWith('application/json')) ctx.body = await parseJson(req);
       // 3) رمز CSRF (نموذج الدخول له آلية مستقلة)
       if (pathname === '/logout' && !ctx.session) return redirect(res, '/');
-      if (pathname !== '/login' && pathname !== '/setup') { // لهما حماية مستقلة (رمز ما قبل الجلسة / الرابط السري)
+      if (!['/login', '/setup', '/write', '/api/write/media'].includes(pathname)) { // لها حماية مستقلة (رمز ما قبل الجلسة / الرابط السري / رمز صفحة الكتابة)
         if (!ctx.session) { const e = new HttpError(401, 'انتهت جلستك. سجّل الدخول من جديد.'); e.login = true; throw e; }
         const token = (ctx.body && ctx.body._csrf) || req.headers['x-csrf-token'];
         if (!S.safeEqual(token, ctx.csrf)) throw new HttpError(403, 'انتهت صلاحية الصفحة. حدّثها ثم حاول مرة أخرى.');
@@ -168,11 +203,11 @@ async function handle(req, res) {
   }
 }
 
-function start({ port = config.port, host = config.host } = {}) {
-  db.open();
-  fs.mkdirSync(config.uploadsDir, { recursive: true });
-  S.purgeExpiredSessions();
-  setInterval(() => S.purgeExpiredSessions(), 6 * 36e5).unref();
+async function start({ port = config.port, host = config.host } = {}) {
+  await db.open();
+  if (config.imageStore === 'disk') fs.mkdirSync(config.uploadsDir, { recursive: true });
+  await S.purgeExpiredSessions();
+  setInterval(() => { S.purgeExpiredSessions().catch(() => {}); }, 6 * 36e5).unref();
   const server = require('node:http').createServer((req, res) => { handle(req, res); });
   server.headersTimeout = 30_000;
   server.requestTimeout = 120_000;

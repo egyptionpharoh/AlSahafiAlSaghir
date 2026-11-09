@@ -23,20 +23,21 @@ function countFiles(dir) {
   return n;
 }
 
-function backup(outRoot = config.backupsDir) {
-  db.open();
+async function backup(outRoot = config.backupsDir) {
+  await db.open();
+  if (db.kind() !== 'local') throw new Error('النسخ الاحتياطي بهذا الأمر للنسخة المحلية فقط. قاعدة Turso السحابية لها نسخ تلقائية من لوحة Turso.');
   const dir = path.join(outRoot, stamp());
   fs.mkdirSync(dir, { recursive: true });
   const dbOut = path.join(dir, 'app.db');
-  db.get().exec(`VACUUM INTO '${dbOut.replace(/'/g, "''")}'`);
+  await db.run(`VACUUM INTO '${dbOut.replace(/'/g, "''")}'`);
   const up = path.join(dir, 'uploads');
   if (fs.existsSync(config.uploadsDir)) fs.cpSync(config.uploadsDir, up, { recursive: true, filter: (src) => !path.basename(src).endsWith('.tmp') });
   else fs.mkdirSync(up);
   const manifest = {
     app: 'alsahafi-alsaghir', created_at: new Date().toISOString(),
-    articles: db.one('SELECT COUNT(*) n FROM articles').n,
-    users: db.one('SELECT COUNT(*) n FROM users').n,
-    media_rows: db.one('SELECT COUNT(*) n FROM media').n,
+    articles: (await db.one('SELECT COUNT(*) n FROM articles')).n,
+    users: (await db.one('SELECT COUNT(*) n FROM users')).n,
+    media_rows: (await db.one('SELECT COUNT(*) n FROM media')).n,
     upload_files: countFiles(up),
     includes: ['app.db (قاعدة البيانات كاملة)', 'uploads/ (كل الصور)'],
   };
@@ -48,9 +49,10 @@ function backup(outRoot = config.backupsDir) {
 if (require.main === module) {
   const i = process.argv.indexOf('--out');
   const out = i > -1 ? path.resolve(process.argv[i + 1]) : undefined;
-  const { dir, manifest } = backup(out);
-  console.log(`✓ اكتملت النسخة الاحتياطية في: ${dir}`);
-  console.log(`  مقالات: ${manifest.articles} | حسابات: ${manifest.users} | صور: ${manifest.upload_files}`);
+  backup(out).then(({ dir, manifest }) => {
+    console.log(`✓ اكتملت النسخة الاحتياطية في: ${dir}`);
+    console.log(`  مقالات: ${manifest.articles} | حسابات: ${manifest.users} | صور: ${manifest.upload_files}`);
+  }).catch((e) => { console.error('✗', e.message); process.exit(1); });
 }
 
 module.exports = { backup };

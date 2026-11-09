@@ -26,6 +26,12 @@ function card(a, variant = 'std') {
   </article>`;
 }
 
+/** دعوة الطلبة للكتابة (تختفي لأعضاء التحرير) */
+function writeCta(ctx) {
+  if (ctx.user && ctx.user.role !== 'student') return '';
+  return html`<aside class="write-cta"><p>✍️ عندك خبر أو فكرة أو قصة من مدرستك؟ اكتبها وأرسلها للجريدة الآن.</p><a class="btn btn--primary" href="/write">اكتب للجريدة</a></aside>`;
+}
+
 function empty(title, text) {
   return html`<section class="empty"><div class="empty__mark">${nib('empty__nib')}</div><h2>${title}</h2><p>${text}</p></section>`;
 }
@@ -46,11 +52,13 @@ function home(ctx, { lead, latest, featured, rising, photo, popular, issue, cats
   const about = db.setting('about');
   if (!lead) {
     return publicPage(ctx, { body: html`
+      ${writeCta(ctx)}
       ${empty('الجريدة تستعد لعددها الأول', 'لم يُنشر أي مقال بعد. حين تعتمد هيئة التحرير أول مقالات الطلبة ستظهر هنا.')}
       ${aboutStrip(about)}` });
   }
   const leadBy = byline(lead, pub());
   return publicPage(ctx, { body: html`
+  ${writeCta(ctx)}
   <section class="lead ${lead.cover_pid ? '' : 'lead--noimg'}" aria-labelledby="lead-title">
     ${lead.cover_pid ? html`<a class="lead__img" href="${articleUrl(lead)}" tabindex="-1" aria-hidden="true">${coverImg(lead, '(max-width: 900px) 100vw, 60vw', true)}</a>` : ''}
     <div class="lead__text">
@@ -151,8 +159,7 @@ function searchPage(ctx, { q, cat, rows, total, page, per, cats, sort }) {
 function articleBody(a, { preview = false } = {}) {
   const by = byline(a, pub());
   const blocks = parseBody(a.body_json);
-  const mediaMap = {};
-  for (const r of db.all('SELECT public_id, width, height FROM media WHERE article_id = ?', a.id)) mediaMap[r.public_id] = r;
+  const mediaMap = a._media || {}; // تُحمَّل في المسار عبر A.withMedia
   const date = a.published_at || a.updated_at;
   const identity = db.setting('identity');
   return html`<article class="story ${preview ? 'story--preview' : ''}" itemscope itemtype="https://schema.org/NewsArticle">

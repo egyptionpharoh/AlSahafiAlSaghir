@@ -6,7 +6,7 @@ const { parseBody, imageIds, slugify } = require('./content');
 const { STATUS } = require('./defaults');
 
 const SELECT = `
-  SELECT a.*, u.display_name AS author_name, u.username AS author_username,
+  SELECT a.*, u.display_name AS author_name, u.username AS author_username, u.is_guest AS author_is_guest,
          st.grade, st.section, st.consent_name_public, st.consent_photo_public,
          pm.public_id AS photo_pid,
          c.name AS category_name, c.slug AS category_slug,
@@ -24,7 +24,7 @@ const PUBLIC = `a.status = 'published' AND a.published_at <= ?`;
 
 function likeEscape(s) { return String(s).replace(/[\\%_]/g, (c) => '\\' + c); }
 
-function listPublic({ category, q, sort = 'new', limit = 12, offset = 0, issueId, featured, risingPen, excludeId } = {}) {
+async function listPublic({ category, q, sort = 'new', limit = 12, offset = 0, issueId, featured, risingPen, excludeId } = {}) {
   const where = [PUBLIC]; const p = [db.now()];
   if (category) { where.push('c.slug = ? AND c.is_visible = 1'); p.push(category); }
   if (issueId) { where.push('a.issue_id = ?'); p.push(issueId); }
@@ -39,61 +39,64 @@ function listPublic({ category, q, sort = 'new', limit = 12, offset = 0, issueId
   const order = sort === 'popular' ? 'a.views DESC, a.published_at DESC'
     : sort === 'home' ? 'a.home_order DESC, a.featured DESC, a.published_at DESC'
       : 'a.published_at DESC';
-  const rows = db.all(`${SELECT} WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ? OFFSET ?`, ...p, limit, offset);
-  const total = db.one(`SELECT COUNT(*) n FROM articles a LEFT JOIN categories c ON c.id = a.category_id WHERE ${where.join(' AND ')}`, ...p).n;
+  const rows = await db.all(`${SELECT} WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT ? OFFSET ?`, ...p, limit, offset);
+  const total = (await db.one(`SELECT COUNT(*) n FROM articles a LEFT JOIN categories c ON c.id = a.category_id WHERE ${where.join(' AND ')}`, ...p)).n;
   return { rows, total };
 }
 
-const getPublic = (pid) => db.one(`${SELECT} WHERE a.public_id = ? AND ${PUBLIC}`, pid, db.now());
-const getByPid = (pid) => db.one(`${SELECT} WHERE a.public_id = ?`, pid);
-const getById = (id) => db.one(`${SELECT} WHERE a.id = ?`, id);
+const getPublic = async (pid) => await db.one(`${SELECT} WHERE a.public_id = ? AND ${PUBLIC}`, pid, db.now());
+const getByPid = async (pid) => await db.one(`${SELECT} WHERE a.public_id = ?`, pid);
+const getById = async (id) => await db.one(`${SELECT} WHERE a.id = ?`, id);
 const isPublic = (a) => a && a.status === 'published' && a.published_at && a.published_at <= db.now();
 
-function mediaMap(article) {
-  const rows = db.all('SELECT public_id, width, height FROM media WHERE article_id = ?', article.id);
+async function mediaMap(article) {
+  const rows = await db.all('SELECT public_id, width, height FROM media WHERE article_id = ?', article.id);
   const map = {};
   for (const r of rows) map[r.public_id] = r;
   return map;
 }
 
-function createDraft(authorId, { categoryId = null, title = '' } = {}) {
+/** يرفق أبعاد صور المقال (لازمة لعرضه) */
+async function withMedia(a) { if (a) a._media = await mediaMap(a); return a; }
+
+async function createDraft(authorId, { categoryId = null, title = '' } = {}) {
   const t = db.now();
   const pid = randomId(8);
-  const r = db.run(`INSERT INTO articles (public_id, author_id, category_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  const r = await db.run(`INSERT INTO articles (public_id, author_id, category_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
     pid, authorId, categoryId, title, t, t);
-  logEvent(Number(r.lastInsertRowid), authorId, 'create', null, 'draft');
+  await logEvent(Number(r.lastInsertRowid), authorId, 'create', null, 'draft');
   return pid;
 }
 
 /** يحفظ محتوى المقال (من الطالب أو من المحرر). يتحقق من أن الصور تخص هذا المقال. */
-function saveContent(article, data) {
+async function saveContent(article, data) {
   const blocks = data.blocks;
-  const allowed = new Set(db.all('SELECT public_id FROM media WHERE article_id = ? AND kind = ?', article.id, 'inline').map((r) => r.public_id));
+  const allowed = new Set((await db.all('SELECT public_id FROM media WHERE article_id = ? AND kind = ?', article.id, 'inline')).map((r) => r.public_id));
   const filtered = blocks.filter((b) => b.t !== 'img' || allowed.has(b.m));
   let coverId = null;
   if (data.cover) {
-    const m = db.one('SELECT id FROM media WHERE public_id = ? AND article_id = ? AND kind = ?', data.cover, article.id, 'cover');
+    const m = await db.one('SELECT id FROM media WHERE public_id = ? AND article_id = ? AND kind = ?', data.cover, article.id, 'cover');
     coverId = m ? m.id : null;
   }
-  const categoryOk = data.categoryId ? db.one('SELECT id FROM categories WHERE id = ?', data.categoryId) : null;
-  db.run(`UPDATE articles SET title = ?, subtitle = ?, summary = ?, body_json = ?, cover_media_id = ?, cover_caption = ?,
+  const categoryOk = data.categoryId ? await db.one('SELECT id FROM categories WHERE id = ?', data.categoryId) : null;
+  await db.run(`UPDATE articles SET title = ?, subtitle = ?, summary = ?, body_json = ?, cover_media_id = ?, cover_caption = ?,
             category_id = ?, slug = ?, updated_at = ? WHERE id = ?`,
   data.title, data.subtitle, data.summary, JSON.stringify(filtered), coverId, data.coverCaption,
   categoryOk ? categoryOk.id : null, slugify(data.title), db.now(), article.id);
   return filtered;
 }
 
-function snapshot(articleId, reason, actorId, note) {
-  const a = db.one('SELECT * FROM articles WHERE id = ?', articleId);
-  const n = (db.one('SELECT MAX(revision_no) n FROM article_revisions WHERE article_id = ?', articleId).n || 0) + 1;
-  db.run(`INSERT INTO article_revisions (article_id, revision_no, reason, note, title, subtitle, summary, body_json, cover_media_id, cover_caption, created_by, created_at)
+async function snapshot(articleId, reason, actorId, note) {
+  const a = await db.one('SELECT * FROM articles WHERE id = ?', articleId);
+  const n = ((await db.one('SELECT MAX(revision_no) n FROM article_revisions WHERE article_id = ?', articleId)).n || 0) + 1;
+  await db.run(`INSERT INTO article_revisions (article_id, revision_no, reason, note, title, subtitle, summary, body_json, cover_media_id, cover_caption, created_by, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   articleId, n, reason, note || null, a.title, a.subtitle, a.summary, a.body_json, a.cover_media_id, a.cover_caption, actorId, db.now());
   return n;
 }
 
-function logEvent(articleId, actorId, action, from, to, note) {
-  db.run('INSERT INTO article_events (article_id, actor_id, action, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+async function logEvent(articleId, actorId, action, from, to, note) {
+  await db.run('INSERT INTO article_events (article_id, actor_id, action, from_status, to_status, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     articleId, actorId, action, from, to, note || null, db.now());
 }
 
@@ -127,7 +130,7 @@ const ACTIONS = {
   restore:         { from: ['archived'], to: 'approved', by: 'editor', label: 'استعادة من الأرشيف' },
 };
 
-function transition(article, action, actor, { note, publishAt } = {}) {
+async function transition(article, action, actor, { note, publishAt } = {}) {
   const def = ACTIONS[action];
   if (!def) throw Object.assign(new Error('إجراء غير معروف.'), { status: 400 });
   if (!def.from.includes(article.status)) throw Object.assign(new Error(`لا يمكن «${def.label}» لمقال حالته «${STATUS[article.status].label}».`), { status: 409 });
@@ -140,7 +143,7 @@ function transition(article, action, actor, { note, publishAt } = {}) {
   }
 
   const t = db.now();
-  return db.tx(() => {
+  return await db.tx(async () => {
     const sets = { status: def.to, updated_at: t };
     if (action === 'submit') sets.submitted_at = t;
     if (action === 'approve') sets.approved_at = t;
@@ -157,20 +160,20 @@ function transition(article, action, actor, { note, publishAt } = {}) {
     if (action === 'unpublish') sets.unpublished_at = t;
     if (action === 'archive') sets.archived_at = t;
     const keys = Object.keys(sets);
-    db.run(`UPDATE articles SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ? AND status = ?`,
+    await db.run(`UPDATE articles SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ? AND status = ?`,
       ...keys.map((k) => sets[k]), article.id, article.status);
-    if (action === 'submit') snapshot(article.id, 'submit', actor.id);
+    if (action === 'submit') await snapshot(article.id, 'submit', actor.id);
     if (def.note && note) {
-      db.run('INSERT INTO editorial_notes (article_id, author_id, body, visible_to_student, created_at) VALUES (?, ?, ?, 1, ?)', article.id, actor.id, note.trim().slice(0, 4000), t);
+      await db.run('INSERT INTO editorial_notes (article_id, author_id, body, visible_to_student, created_at) VALUES (?, ?, ?, 1, ?)', article.id, actor.id, note.trim().slice(0, 4000), t);
     }
-    logEvent(article.id, actor.id, action, article.status, def.to, note ? note.trim().slice(0, 500) : (sets.published_at && sets.published_at > t ? `مجدول: ${sets.published_at}` : null));
+    await logEvent(article.id, actor.id, action, article.status, def.to, note ? note.trim().slice(0, 500) : (sets.published_at && sets.published_at > t ? `مجدول: ${sets.published_at}` : null));
     return def.to;
   });
 }
 
-function counts(authorId) {
-  const rows = db.all('SELECT status, COUNT(*) n FROM articles WHERE author_id = ? GROUP BY status', authorId);
+async function counts(authorId) {
+  const rows = await db.all('SELECT status, COUNT(*) n FROM articles WHERE author_id = ? GROUP BY status', authorId);
   const out = {}; for (const r of rows) out[r.status] = r.n; return out;
 }
 
-module.exports = { SELECT, PUBLIC, listPublic, getPublic, getByPid, getById, isPublic, mediaMap, createDraft, saveContent, snapshot, logEvent, submissionProblems, transition, ACTIONS, counts };
+module.exports = { SELECT, PUBLIC, withMedia, listPublic, getPublic, getByPid, getById, isPublic, mediaMap, createDraft, saveContent, snapshot, logEvent, submissionProblems, transition, ACTIONS, counts };

@@ -138,8 +138,18 @@ async function processImage(buf, kind) {
 
 function userError(msg) { const e = new Error(msg); e.userMessage = msg; e.status = 400; return e; }
 
-// ===== التخزين الدائم على القرص =====
-function storeFile(buf, ext) {
+// ===== التخزين الدائم =====
+// 'disk': مجلد uploads (التشغيل على جهاز المدرسة). 'db': داخل قاعدة البيانات (Vercel/Turso — لا قرص دائم هناك).
+// المفاتيح القديمة (2026/11/xxx.jpg) تبقى مقروءة من القرص دائمًا؛ المفاتيح الجديدة في قاعدة البيانات تبدأ بـ db/
+const DB_KEY = /^db\/[A-Za-z0-9_-]+\.(jpg|png|webp)$/;
+
+async function storeFile(buf, ext) {
+  if (config.imageStore === 'db') {
+    const db = require('./db');
+    const key = `db/${randomId(18)}.${ext}`;
+    await db.run('INSERT INTO media_data (storage_key, data, created_at) VALUES (?, ?, ?)', key, buf, db.now());
+    return key;
+  }
   const d = new Date();
   const dir = `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
   const name = `${randomId(18)}.${ext}`;
@@ -157,6 +167,21 @@ function filePath(key) {
   return path.join(config.uploadsDir, key);
 }
 
-function removeFile(key) { const p = filePath(key); if (p) fs.rm(p, { force: true }, () => {}); }
+/** يقرأ محتوى الصورة أينما خُزّنت. يعيد Buffer أو null */
+async function readFile(key) {
+  if (DB_KEY.test(key)) {
+    const db = require('./db');
+    const r = await db.one('SELECT data FROM media_data WHERE storage_key = ?', key);
+    return r && r.data ? Buffer.from(r.data) : null;
+  }
+  const p = filePath(key);
+  if (!p) return null;
+  try { return fs.readFileSync(p); } catch { return null; }
+}
 
-module.exports = { processImage, storeFile, filePath, removeFile, sniff, hasSharp: () => !!sharp };
+async function removeFile(key) {
+  if (DB_KEY.test(key)) { const db = require('./db'); await db.run('DELETE FROM media_data WHERE storage_key = ?', key); return; }
+  const p = filePath(key); if (p) fs.rm(p, { force: true }, () => {});
+}
+
+module.exports = { processImage, storeFile, filePath, readFile, removeFile, sniff, hasSharp: () => !!sharp };

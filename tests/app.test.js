@@ -16,6 +16,9 @@ let srv; let base;
 const anon = () => new H.Client(base);
 const dbq = (sql, ...p) => { const d = new DatabaseSync(path.join(DATA, 'app.db'), { readOnly: true }); try { return d.prepare(sql).all(...p); } finally { d.close(); } };
 const state = {};
+const TURSO = !!process.env.TEST_TURSO_MOCK; // نفس الاختبارات على وضع Turso السحابي (الصور داخل قاعدة البيانات)
+/** محتوى الصورة المخزنة أينما كانت: مجلد uploads أو جدول media_data */
+const stored = (key) => (key.startsWith('db/') ? Buffer.from(dbq('SELECT data FROM media_data WHERE storage_key = ?', key)[0].data) : fs.readFileSync(path.join(DATA, 'uploads', key)));
 
 function cli(script, args = [], env = {}) {
   return execFileSync(process.execPath, [path.join(H.ROOT, 'scripts', script), ...args], { env: { ...process.env, NODE_ENV: 'test', DATA_DIR: DATA, BACKUPS_DIR: path.join(DATA, 'backups'), ...env }, encoding: 'utf8' });
@@ -165,7 +168,7 @@ describe('غرفة الطالب: كتابة مقال كامل', () => {
     assert.equal(r.status, 201, r.text);
     state.profilePid = r.json.pid;
     const row = dbq('SELECT storage_key FROM media WHERE public_id = ?', r.json.pid)[0];
-    const file = fs.readFileSync(path.join(DATA, 'uploads', row.storage_key));
+    const file = stored(row.storage_key);
     assert.ok(!file.includes('GPSLatitude'), 'بيانات الموقع يجب أن تُحذف');
     assert.equal(file[0], 0xff); assert.equal(file[1], 0xd8);
   });
@@ -174,8 +177,8 @@ describe('غرفة الطالب: كتابة مقال كامل', () => {
     assert.equal(cover.status, 201, cover.text);
     state.coverPid = cover.json.pid;
     assert.equal(cover.json.w, 300);
-    const stored = dbq('SELECT storage_key FROM media WHERE public_id = ?', cover.json.pid)[0];
-    assert.ok(!fs.readFileSync(path.join(DATA, 'uploads', stored.storage_key)).includes('camera-serial'), 'المقاطع النصية في PNG تُحذف');
+    const storedRow = dbq('SELECT storage_key FROM media WHERE public_id = ?', cover.json.pid)[0];
+    assert.ok(!stored(storedRow.storage_key).includes('camera-serial'), 'المقاطع النصية في PNG تُحذف');
     state.inline = [];
     for (let i = 0; i < 3; i++) {
       const r = await state.s1.upload(`/api/media?article=${state.pid}&kind=inline`, i % 2 ? H.TINY_JPEG : H.makePng(160, 120, [40, 90, 60], [240, 230, 200]), i % 2 ? 'image/jpeg' : 'image/png', state.csrf1);
@@ -582,7 +585,7 @@ describe('الأخطاء لا تكشف تفاصيل داخلية', () => {
     const pages = await Promise.all(['/', '/cover', '/login', `/article/${state.pid}`].map((u) => anon().get(u)));
     for (const p of pages) { assert.doesNotMatch(p.text, /APP_SECRET|scrypt\$|\/tmp\//); }
   });
-  it('فشل التخزين: رفع صورة يعطي خطأ مفهومًا بلا تسريب، ويُبلغ فحص الصحة بالمشكلة', async () => {
+  it('فشل التخزين: رفع صورة يعطي خطأ مفهومًا بلا تسريب، ويُبلغ فحص الصحة بالمشكلة', { skip: TURSO && 'خاص بالتخزين على القرص' }, async () => {
     const up = path.join(DATA, 'uploads');
     const moved = up + '-moved';
     fs.renameSync(up, moved);
@@ -613,7 +616,7 @@ describe('الاستمرارية والنسخ الاحتياطي', () => {
     assert.equal((await anon().fetchRaw(`/media/${state.coverPid}`)).status, 200);
     assert.equal((await anon().fetchRaw(`/media/${state.inline[1]}`)).status, 200);
   });
-  it('نسخة احتياطية ثم استعادة بعد حذف بيانات', async () => {
+  it('نسخة احتياطية ثم استعادة بعد حذف بيانات', { skip: TURSO && 'النسخ الاحتياطي بالأوامر للنسخة المحلية فقط' }, async () => {
     const out = cli('backup.js');
     const dir = out.match(/في: (.+)/)[1].trim();
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));

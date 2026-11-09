@@ -661,3 +661,51 @@ a.tile:hover { border-color: var(--ink-3); }
   .slips { grid-template-columns: 1fr 1fr; }
   .work { background: #fff; }
 }
+
+/* ===== «اكتب للجريدة»: كتابة مباشرة بلا حساب ===== */
+.btn-write { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; background: var(--amber); color: #fff !important; font-weight: 700; text-decoration: none; border: 1.5px solid var(--amber); }
+.btn-write:hover { background: #93661a; border-color: #93661a; }
+.toolbar__links .btn-login { font-weight: 500 !important; font-size: .88rem; color: var(--muted) !important; }
+.write-cta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; background: var(--amber-soft); border: 1px solid #e7d3ac; border-radius: 10px; padding: 16px 20px; margin: 4px 0 28px; }
+.write-cta p { margin: 0; font-weight: 600; color: var(--ink); font-size: 1.05rem; }
+.write { max-width: 760px; margin: 10px auto 40px; }
+.write__head { text-align: center; margin-bottom: 18px; }
+.write__title { font: 700 clamp(1.7rem, 4.5vw, 2.3rem)/1.35 var(--f-head); color: var(--ink); margin: 6px 0 8px; }
+.write__intro { font-size: 1.08rem; color: var(--text); margin: 0 auto; max-width: 600px; }
+.write__form { display: flex; flex-direction: column; gap: 18px; }
+.write__card { background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; padding: 18px clamp(14px, 3vw, 24px) 20px; margin: 0; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.write__step { font: 700 1.12rem var(--f-ui); color: var(--ink); padding: 0 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.write__step > span:first-child { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--ink); color: #fff; font-size: .95rem; }
+.write__step .opt { font-weight: 500; }
+.write__row { display: flex; flex-wrap: wrap; gap: 12px; }
+.write__row .field { flex: 1 1 140px; }
+.write__row .write__grow { flex: 3 1 220px; }
+.write__row .write__small { flex: 0 1 110px; }
+.write__form textarea[data-body] { min-height: 260px; font-size: 1.08rem; line-height: 1.9; }
+.write__count { margin: -6px 0 0; color: var(--muted); font-size: .95rem; }
+.write__count.ok { color: var(--green); font-weight: 600; }
+.write__hint { margin: -6px 0 0; font-size: .95rem; }
+.write__pics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.write__pics:empty { display: none; }
+.pic { position: relative; margin: 0; background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+.pic img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.pic:first-child::before { content: 'صورة المقال الرئيسية'; position: absolute; top: 6px; inset-inline-start: 6px; background: var(--ink); color: #fff; font-size: .72rem; padding: 2px 8px; border-radius: 999px; }
+.pic input { border: 0; border-top: 1px solid var(--rule); padding: 8px 10px; font-size: .9rem; min-width: 0; background: #fff; }
+.pic__x { position: absolute; top: 6px; inset-inline-end: 6px; width: 32px; height: 32px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; font-size: 1.3rem; line-height: 1; cursor: pointer; }
+.write__add { align-self: flex-start; cursor: pointer; }
+.write__add[hidden] { display: none; }
+.write__status { margin: 0; min-height: 1.4em; font-weight: 600; color: var(--ink-2); }
+.write__status.danger { color: var(--red); }
+.write__send { display: flex; flex-direction: column; gap: 8px; text-align: center; }
+.write__send .muted { margin: 0; font-size: .92rem; }
+.write__done { text-align: center; align-items: center; }
+.write__big { font-size: 3rem; margin: 0; line-height: 1; }
+.write__keep { font-weight: 600; margin-bottom: 0; }
+.write__actions { justify-content: center; }
+.hp { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; opacity: 0; pointer-events: none; }
+@media (max-width: 600px) {
+  .toolbar__links { gap: 10px; }
+  .write__card { border-radius: 10px; }
+  .write-cta { padding: 14px; }
+  .write-cta .btn { width: 100%; }
+}

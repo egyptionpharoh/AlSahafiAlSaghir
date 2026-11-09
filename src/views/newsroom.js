@@ -12,7 +12,7 @@ const { ACTIONS } = require('../articles');
 const isAdmin = (ctx) => ctx.user.role === 'admin';
 
 function sideNav(ctx, current) {
-  const queue = db.one("SELECT COUNT(*) n FROM articles WHERE status IN ('submitted','in_review')").n;
+  const queue = ctx.queueCount || 0; // يُحسب في app.js لأعضاء التحرير
   const items = [
     ['/newsroom', 'لوحة المتابعة', 'dash'],
     ['/newsroom/articles?f=queue', 'بانتظار المراجعة', 'queue', queue],

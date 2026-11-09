@@ -22,11 +22,20 @@ const env = process.env;
 const isProd = (env.NODE_ENV || 'development') === 'production';
 const bool = (v, d) => (v === undefined || v === '' ? d : /^(1|true|yes|on)$/i.test(v));
 
-const dataDir = path.resolve(ROOT, env.DATA_DIR || './data');
+const onVercel = !!env.VERCEL;
+// على Vercel لا يوجد قرص دائم؛ المجلد المؤقت /tmp هو الوحيد القابل للكتابة (لا تُحفظ فيه بيانات دائمة)
+const dataDir = onVercel ? '/tmp/alsahafi' : path.resolve(ROOT, env.DATA_DIR || './data');
+const tursoUrl = env.TURSO_DATABASE_URL || env.TURSO_URL || '';
+const tursoToken = env.TURSO_AUTH_TOKEN || '';
 
 const config = {
   root: ROOT,
   isProd,
+  onVercel,
+  tursoUrl,
+  tursoToken,
+  // مكان حفظ الصور: 'db' داخل قاعدة البيانات (إلزامي مع Turso/Vercel) أو 'disk' في مجلد uploads
+  imageStore: (tursoUrl && tursoToken) || onVercel ? 'db' : (env.IMAGE_STORE === 'db' ? 'db' : 'disk'),
   port: Number(env.PORT || 3000),
   host: env.HOST || (isProd ? '0.0.0.0' : '127.0.0.1'),
   baseUrl: (env.BASE_URL || '').replace(/\/+$/, ''),
@@ -34,18 +43,27 @@ const config = {
   dbFile: path.join(dataDir, 'app.db'),
   uploadsDir: path.resolve(ROOT, env.UPLOADS_DIR || path.join(dataDir, 'uploads')),
   backupsDir: path.resolve(ROOT, env.BACKUPS_DIR || './backups'),
-  appSecret: env.APP_SECRET || '',
-  trustProxy: bool(env.TRUST_PROXY, false),
+  // إن لم يُضبط APP_SECRET على الاستضافة يُشتق سر ثابت من رمز Turso (يكفي لتجزئة عناوين IP)
+  appSecret: env.APP_SECRET || (tursoToken ? require('node:crypto').createHash('sha256').update(`alsahafi:${tursoToken}`).digest('hex') : ''),
+  trustProxy: bool(env.TRUST_PROXY, onVercel), // Vercel يمرر عنوان الزائر في X-Forwarded-For
   cookieSecure: bool(env.COOKIE_SECURE, isProd),
-  maxUploadBytes: Math.round(Number(env.MAX_UPLOAD_MB || 6) * 1024 * 1024),
+  // Vercel يرفض أي طلب أكبر من 4.5 ميغابايت، لذلك الحد هناك 4 ميغابايت (الصور تُضغط في المتصفح قبل الرفع)
+  maxUploadBytes: Math.round(Math.min(Number(env.MAX_UPLOAD_MB || (onVercel ? 4 : 6)), onVercel ? 4 : 1e6) * 1024 * 1024),
   sessionIdleHours: Number(env.SESSION_IDLE_HOURS || 12),
   sessionMaxDays: Number(env.SESSION_MAX_DAYS || 7),
   fontsCdn: bool(env.FONTS_CDN, true),
 };
 
+config.problem = null;
 if (isProd && (!config.appSecret || config.appSecret.length < 32)) {
-  console.error('خطأ: يجب ضبط APP_SECRET بقيمة عشوائية طولها 32 حرفًا على الأقل في بيئة الإنتاج. راجع README.');
-  process.exit(1);
+  config.problem = 'يجب ضبط APP_SECRET بقيمة عشوائية طولها 32 حرفًا على الأقل (أو ربط قاعدة بيانات Turso) في بيئة الإنتاج. راجع README.';
+  console.error('خطأ: ' + config.problem);
+  // على Vercel لا نُنهي العملية (كان ذلك سبب FUNCTION_INVOCATION_FAILED)، بل تعرض الصفحة رسالة واضحة
+  if (!onVercel) process.exit(1);
+}
+if (onVercel && !(tursoUrl && tursoToken)) {
+  config.problem = 'قاعدة البيانات غير مربوطة: أضف قاعدة Turso من تبويب Storage في Vercel (المتغيران TURSO_DATABASE_URL و TURSO_AUTH_TOKEN) ثم أعد النشر.';
+  console.error('خطأ: ' + config.problem);
 }
 if (!config.appSecret) {
   // في بيئة التطوير فقط: سر مؤقت يتغير مع كل تشغيل (يُستخدم لتجزئة عناوين IP فقط).

@@ -20,12 +20,12 @@ function preToken(ctx) {
 }
 
 module.exports = (r) => {
-  r.get('/login', (ctx) => {
+  r.get('/login', async (ctx) => {
     if (ctx.user) return redirect(ctx.res, homeFor(ctx.user.role));
     return V.loginPage(ctx, { preToken: preToken(ctx), next: safeNext(ctx.query.next) });
   });
 
-  r.post('/login', (ctx) => {
+  r.post('/login', async (ctx) => {
     const b = ctx.body;
     if (!S.safeEqual(b._pre, ctx.cookies[PRE])) {
       ctx.setFlash('error', 'انتهت صلاحية الصفحة. حاول مرة أخرى.');
@@ -36,7 +36,7 @@ module.exports = (r) => {
     // حد مرتفع لكل عنوان IP (فصل كامل قد يدخل من شبكة المدرسة نفسها)، والحماية الأساسية هي قفل الحساب بعد 5 محاولات خاطئة
     const rl = S.rateLimit(`login:${ctx.ip}`, 150, 15 * 60_000);
     if (!rl.ok) {
-      S.audit(null, 'login.ratelimited', 'ip', null, { username }, ctx.ip);
+      await S.audit(null, 'login.ratelimited', 'ip', null, { username }, ctx.ip);
       throw new HttpError(429, `محاولات دخول كثيرة. حاول بعد ${Math.ceil(rl.retryAfter / 60)} دقيقة.`);
     }
     const fail = (msg = 'اسم المستخدم أو كلمة المرور غير صحيحة.') => {
@@ -44,42 +44,42 @@ module.exports = (r) => {
       ctx.res.statusCode = 401;
       return V.loginPage(ctx, { preToken: preToken(ctx), username, next: safeNext(b.next) });
     };
-    const u = db.one('SELECT * FROM users WHERE username = ?', username);
+    const u = await db.one('SELECT * FROM users WHERE username = ?', username);
     if (!u) { S.verifyPassword(password, S.DUMMY_HASH); return fail(); }
     if (u.locked_until && Date.parse(u.locked_until) > Date.now()) {
       S.verifyPassword(password, S.DUMMY_HASH);
       return fail('أُوقف الدخول إلى هذا الحساب مؤقتًا بعد محاولات خاطئة متكررة. حاول بعد 15 دقيقة أو اطلب من المشرف إعادة تعيين كلمة المرور.');
     }
     if (!S.verifyPassword(password, u.password_hash)) {
-      const locked = S.registerFailedLogin(u);
-      S.audit(u.id, locked ? 'login.locked' : 'login.failed', 'user', u.id, null, ctx.ip);
+      const locked = await S.registerFailedLogin(u);
+      await S.audit(u.id, locked ? 'login.locked' : 'login.failed', 'user', u.id, null, ctx.ip);
       return fail();
     }
     if (!u.is_active) return fail('هذا الحساب معطّل. تواصل مع مشرف الجريدة.');
-    db.run('UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = ? WHERE id = ?', db.now(), u.id);
-    const { token, expires } = S.createSession(u.id, ctx.req);
+    await db.run('UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = ? WHERE id = ?', db.now(), u.id);
+    const { token, expires } = await S.createSession(u.id, ctx.req);
     addCookie(ctx.res, cookie(S.COOKIE, token, { maxAge: (expires - Date.now()) / 1000, secure: config.cookieSecure, sameSite: 'Lax' }));
     addCookie(ctx.res, cookie(PRE, '', { maxAge: 0, secure: config.cookieSecure, sameSite: 'Strict' }));
-    S.audit(u.id, 'login', 'user', u.id, null, ctx.ip);
+    await S.audit(u.id, 'login', 'user', u.id, null, ctx.ip);
     if (u.must_change_password) return redirect(ctx.res, '/account/password');
     return redirect(ctx.res, safeNext(b.next) || homeFor(u.role));
   });
 
-  r.post('/logout', (ctx) => {
-    S.destroySession(ctx.cookies[S.COOKIE]);
+  r.post('/logout', async (ctx) => {
+    await S.destroySession(ctx.cookies[S.COOKIE]);
     addCookie(ctx.res, cookie(S.COOKIE, '', { maxAge: 0, secure: config.cookieSecure }));
     return redirect(ctx.res, '/');
   });
 
-  r.get('/account/password', (ctx) => {
+  r.get('/account/password', async (ctx) => {
     if (!ctx.user) return redirect(ctx.res, '/login');
     return V.passwordPage(ctx, { forced: !!ctx.user.must_change_password });
   });
 
-  r.post('/account/password', (ctx) => {
+  r.post('/account/password', async (ctx) => {
     if (!ctx.user) return redirect(ctx.res, '/login');
     const { current, password, confirm } = ctx.body;
-    const u = db.one('SELECT * FROM users WHERE id = ?', ctx.user.id);
+    const u = await db.one('SELECT * FROM users WHERE id = ?', ctx.user.id);
     const again = (msg) => { ctx.flash = { type: 'error', msg }; ctx.res.statusCode = 400; return V.passwordPage(ctx, { forced: !!u.must_change_password }); };
     const rl = S.rateLimit(`pwchange:${u.id}`, 10, 15 * 60_000);
     if (!rl.ok) throw new HttpError(429, 'محاولات كثيرة. حاول لاحقًا.');
@@ -88,9 +88,9 @@ module.exports = (r) => {
     const p = S.passwordProblem(password, { role: u.role });
     if (p) return again(p);
     if (S.verifyPassword(password, u.password_hash)) return again('اختر كلمة مرور مختلفة عن الحالية.');
-    db.run('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?', S.hashPassword(password), db.now(), u.id);
-    S.destroyUserSessions(u.id, ctx.session.token_hash); // إنهاء الجلسات الأخرى
-    S.audit(u.id, 'password.change', 'user', u.id, null, ctx.ip);
+    await db.run('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?', S.hashPassword(password), db.now(), u.id);
+    await S.destroyUserSessions(u.id, ctx.session.token_hash); // إنهاء الجلسات الأخرى
+    await S.audit(u.id, 'password.change', 'user', u.id, null, ctx.ip);
     ctx.setFlash('ok', 'حُفظت كلمة المرور الجديدة.');
     return redirect(ctx.res, homeFor(u.role));
   });

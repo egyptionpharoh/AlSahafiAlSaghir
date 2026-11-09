@@ -57,40 +57,40 @@ function safeEqual(a, b) {
 // ===== الجلسات =====
 const COOKIE = config.cookieSecure ? '__Host-ss_sid' : 'ss_sid';
 
-function createSession(userId, req) {
+async function createSession(userId, req) {
   const token = crypto.randomBytes(32).toString('base64url');
   const t = new Date();
   const expires = new Date(t.getTime() + config.sessionMaxDays * 864e5);
-  db.run(`INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at, ip_hash, user_agent)
+  await db.run(`INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at, ip_hash, user_agent)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   sha256(token), userId, randomId(24), t.toISOString(), t.toISOString(), expires.toISOString(),
   ipHash(req.ip), String(req.headers['user-agent'] || '').slice(0, 200));
   return { token, expires };
 }
 
-function loadSession(token) {
+async function loadSession(token) {
   if (!token || token.length > 100) return null;
-  const s = db.one(`SELECT s.*, u.username, u.role, u.display_name, u.is_active, u.must_change_password
+  const s = await db.one(`SELECT s.*, u.username, u.role, u.display_name, u.is_active, u.must_change_password
                     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`, sha256(token));
   if (!s) return null;
   const nowMs = Date.now();
   const idleLimit = config.sessionIdleHours * 36e5;
   if (!s.is_active || Date.parse(s.expires_at) < nowMs || nowMs - Date.parse(s.last_seen_at) > idleLimit) {
-    db.run('DELETE FROM sessions WHERE token_hash = ?', s.token_hash);
+    await db.run('DELETE FROM sessions WHERE token_hash = ?', s.token_hash);
     return null;
   }
   if (nowMs - Date.parse(s.last_seen_at) > 60_000) {
-    db.run('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', new Date().toISOString(), s.token_hash);
+    await db.run('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?', new Date().toISOString(), s.token_hash);
   }
   return s;
 }
 
-function destroySession(token) { if (token) db.run('DELETE FROM sessions WHERE token_hash = ?', sha256(token)); }
-function destroyUserSessions(userId, exceptHash) {
-  if (exceptHash) db.run('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', userId, exceptHash);
-  else db.run('DELETE FROM sessions WHERE user_id = ?', userId);
+async function destroySession(token) { if (token) await db.run('DELETE FROM sessions WHERE token_hash = ?', sha256(token)); }
+async function destroyUserSessions(userId, exceptHash) {
+  if (exceptHash) await db.run('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', userId, exceptHash);
+  else await db.run('DELETE FROM sessions WHERE user_id = ?', userId);
 }
-function purgeExpiredSessions() { db.run('DELETE FROM sessions WHERE expires_at < ?', new Date().toISOString()); }
+async function purgeExpiredSessions() { await db.run('DELETE FROM sessions WHERE expires_at < ?', new Date().toISOString()); }
 
 // ===== تحديد معدل الطلبات (في الذاكرة) =====
 const buckets = new Map();
@@ -105,15 +105,15 @@ setInterval(() => { const t = Date.now(); for (const [k, b] of buckets) if (t > 
 
 // ===== قفل الحساب بعد محاولات فاشلة =====
 const MAX_FAILS = 5, LOCK_MINUTES = 15;
-function registerFailedLogin(user) {
+async function registerFailedLogin(user) {
   const fails = user.failed_logins + 1;
   const lock = fails >= MAX_FAILS ? new Date(Date.now() + LOCK_MINUTES * 60_000).toISOString() : null;
-  db.run('UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?', lock ? 0 : fails, lock, user.id);
+  await db.run('UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?', lock ? 0 : fails, lock, user.id);
   return lock;
 }
 
-function audit(actorId, action, targetType, targetId, details, ip) {
-  db.run('INSERT INTO audit_log (actor_id, action, target_type, target_id, details, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+async function audit(actorId, action, targetType, targetId, details, ip) {
+  await db.run('INSERT INTO audit_log (actor_id, action, target_type, target_id, details, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     actorId || null, action, targetType || null, targetId == null ? null : String(targetId),
     details ? JSON.stringify(details) : null, ip ? ipHash(ip) : null, db.now());
 }

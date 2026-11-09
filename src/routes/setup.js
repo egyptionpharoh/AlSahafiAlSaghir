@@ -8,14 +8,25 @@ const S = require('../security');
 const { html, redirect, cookie, addCookie, notFound, bad } = require('../http');
 const { plainPage } = require('../views/layout');
 
+// الرمز مشتق من سر التطبيق، فيكون واحدًا في كل نسخ التطبيق على Vercel (لا يُعرف إلا من سجلات التشغيل)
 let token = null;
-const hasAdmin = () => !!db.one("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1");
+const deriveToken = () => require('node:crypto').createHmac('sha256', config.appSecret).update('alsahafi-setup-v1').digest('base64url').slice(0, 32);
+const hasAdmin = async () => !!await db.one("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1");
 
 /** يعيد رابط الإعداد إن لم يوجد مسؤول بعد، وإلا null */
-function setupUrl(base) {
-  if (hasAdmin()) { token = null; return null; }
-  if (!token) token = S.randomId(24);
+async function setupUrl(base) {
+  if (await hasAdmin()) { token = null; return null; }
+  if (!token) token = deriveToken();
   return `${base}/setup?key=${token}`;
+}
+
+let announced = false;
+/** على Vercel: يطبع رابط إنشاء المسؤول في سجلات التشغيل مرة واحدة لكل نسخة ما دام لا يوجد مسؤول */
+async function announceSetup(base) {
+  if (announced) return;
+  announced = true;
+  const u = await setupUrl(base);
+  if (u) console.log(`[setup] لا يوجد حساب مسؤول بعد. رابط الإنشاء (مرة واحدة): ${u}`);
 }
 
 function form(ctx, { key, name = '', username = '' }) {
@@ -33,14 +44,16 @@ function form(ctx, { key, name = '', username = '' }) {
 }
 
 module.exports = (r) => {
-  r.get('/setup', (ctx) => {
-    if (hasAdmin()) return redirect(ctx.res, '/login');
+  r.get('/setup', async (ctx) => {
+    if (await hasAdmin()) return redirect(ctx.res, '/login');
+    if (!token) token = deriveToken();
     if (!token || !S.safeEqual(ctx.query.key, token)) throw notFound();
     return form(ctx, { key: token });
   });
 
-  r.post('/setup', (ctx) => {
-    if (hasAdmin()) return redirect(ctx.res, '/login');
+  r.post('/setup', async (ctx) => {
+    if (await hasAdmin()) return redirect(ctx.res, '/login');
+    if (!token) token = deriveToken();
     const b = ctx.body;
     if (!token || !S.safeEqual(b.key, token)) throw notFound();
     const name = String(b.name || '').trim().slice(0, 80);
@@ -51,14 +64,14 @@ module.exports = (r) => {
     if (b.password !== b.confirm) return again('كلمتا المرور غير متطابقتين.');
     const p = S.passwordProblem(b.password, { role: 'admin' });
     if (p) return again(p);
-    if (db.one('SELECT 1 FROM users WHERE username = ?', username)) throw bad('اسم المستخدم مستخدم.');
+    if (await db.one('SELECT 1 FROM users WHERE username = ?', username)) throw bad('اسم المستخدم مستخدم.');
     const t = db.now();
-    const res = db.run('INSERT INTO users (username, password_hash, role, display_name, must_change_password, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)',
+    const res = await db.run('INSERT INTO users (username, password_hash, role, display_name, must_change_password, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)',
       username, S.hashPassword(b.password), 'admin', name, t, t);
     const id = Number(res.lastInsertRowid);
-    token = null; // الرابط لا يعمل مرة أخرى
-    S.audit(id, 'admin.create.setup', 'user', id, { username }, ctx.ip);
-    const { token: sid, expires } = S.createSession(id, ctx.req);
+    token = null; // الرابط لا يعمل مرة أخرى (hasAdmin يمنعه في كل النسخ)
+    await S.audit(id, 'admin.create.setup', 'user', id, { username }, ctx.ip);
+    const { token: sid, expires } = await S.createSession(id, ctx.req);
     addCookie(ctx.res, cookie(S.COOKIE, sid, { maxAge: (expires - Date.now()) / 1000, secure: config.cookieSecure, sameSite: 'Lax' }));
     ctx.setFlash('ok', `أُنشئ حسابك. اسم المستخدم للدخول لاحقًا: ${username}. ابدأ بمراجعة إعدادات الجريدة ورفع الصور.`);
     return redirect(ctx.res, '/newsroom/settings');
@@ -66,3 +79,4 @@ module.exports = (r) => {
 };
 
 module.exports.setupUrl = setupUrl;
+module.exports.announceSetup = announceSetup;
