@@ -1,0 +1,21 @@
+{
+  "name": "alsahafi-alsaghir",
+  "version": "1.0.0",
+  "description": "الصحفي الصغير — جريدة مدرسية إلكترونية: من كتابة الطالب إلى المراجعة والنشر",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "create-admin": "node scripts/create-admin.js",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js"
+  },
+  "dependencies": {},
+  "optionalDependencies": {}
+}

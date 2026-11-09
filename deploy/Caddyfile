@@ -1,0 +1,9 @@
+# خادم Caddy أمام التطبيق: يصدر شهادة HTTPS مجانية تلقائيًا (Let's Encrypt) ويجددها.
+# استبدل النطاق بنطاقك بعد ربطه بعنوان IP الخادم (سجل A في إعدادات النطاق).
+sahafi.example.om {
+    encode gzip
+    request_body {
+        max_size 10MB
+    }
+    reverse_proxy 127.0.0.1:3000
+}

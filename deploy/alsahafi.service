@@ -1,0 +1,23 @@
+# خدمة systemd لتشغيل «الصحفي الصغير» على خادم VPS (لينكس) وإعادة تشغيله تلقائيًا.
+# 1) انسخ المشروع إلى /opt/alsahafi  وأنشئ مستخدمًا:  sudo useradd -r -s /usr/sbin/nologin alsahafi
+# 2) sudo chown -R alsahafi:alsahafi /opt/alsahafi
+# 3) انسخ هذا الملف إلى /etc/systemd/system/alsahafi.service
+# 4) sudo systemctl daemon-reload && sudo systemctl enable --now alsahafi
+[Unit]
+Description=Al-Sahafi Al-Saghir school newspaper
+After=network.target
+
+[Service]
+Type=simple
+User=alsahafi
+WorkingDirectory=/opt/alsahafi
+EnvironmentFile=/opt/alsahafi/.env
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
